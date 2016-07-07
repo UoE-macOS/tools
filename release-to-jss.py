@@ -19,6 +19,10 @@ def show_help():
         
         The script expects that the current working directory is a
 	local git repository in which <file> exists
+        
+        You need to have the jss-python module installed and configured
+        appropriately to talk to your JSS. MANY thanks to craigsheag for
+        that module:  https://github.com/sheagcraig/python-jss
   """
   sys.exit(1)
   
