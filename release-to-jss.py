@@ -16,6 +16,9 @@ def show_help():
         tag: id of a tag which exists in this git repo (local or remote)
         name: The name of the target script object in the JSS
         file: The local file containing the script to be pushed 
+        
+        The script expects that the current working directory is a
+	local git repository in which <file> exists
   """
   sys.exit(1)
   
