@@ -7,6 +7,7 @@ import sys
 import time
 import subprocess
 import dircache
+from string import Template
 from base64 import b64encode, b64decode
 from optparse import OptionParser
   
@@ -26,9 +27,6 @@ parser.description="The script expects that the current working directory is a l
 (options, args) = parser.parse_args()
 
 def _main(options):
-  # For debugging only
-  print options
-
   if not ( options.script_file or options.push_all ):
     print "You need to specify a script file to push, or --all"
     sys.exit(255)
@@ -46,7 +44,8 @@ def _main(options):
         print "No name specified, assuming %s" % options.script_file
 	options.script_name=options.script_file
       jss_script = load_script(_jss, options.script_name)
-      update_script(jss_script, options.script_file, options.script_tag)
+      script_info = get_git_info(_jss, options.script_file, options.script_tag) 
+      update_script(jss_script, options.script_file, script_info)
       save_script(jss_script)
     else:
       # Find out the names of all potential files on the current directory
@@ -93,26 +92,54 @@ def cleanup(script_tag):
   subprocess.check_call([ "git", "branch", "-d", "release-"+script_tag ])
 
   
-def update_script(jss_script, script_file, script_tag):
-  
-  # Update the notes field - we just prepend a message stating when
-  # this push took place.
-  msg = "Tag %s pushed from git @ %s\n" % (script_tag, time.strftime("%c"))
-  jss_script.find('notes').text = msg + jss_script.find('notes').text
+def update_script(jss_script, script_file, script_info, should_template=True):
+  # Update the notes field to contain the full GIT log for this
+  # script. I don't know what the size limit on this is...
+  jss_script.find('notes').text = script_info['LOG']
   print jss_script.find('notes')
-
+  
   # Update the script - we need to write a base64 encoded version
   # of the contents of script_file into the 'script_contents_encoded'
   # element of the script object
   f = open(script_file, 'r')
-  jss_script.find('script_contents_encoded').text = b64encode(f.read())
+  
+  if should_template == True:
+    print "Templating script..."
+    jss_script.find('script_contents_encoded').text = b64encode(template_script(f.read(), script_info))
+  else:
+    jss_script.find('script_contents_encoded').text = b64encode(f.read())
   f.close()
   
   # Only one of script_contents and script_contents_encoded should be sent
   # so delete the one we are not using.
   jss_script.remove(jss_script.find('script_contents'))
 
+def get_git_info(jss_prefs, script_file, script_tag):
+  git_info={}
+  git_info['VERSION'] = script_tag
+  git_info['ORIGIN'] = subprocess.check_output(["git", "config", "--get", "remote.origin.url"]).strip()
+  git_info['DATE'] = time.strftime("%c")
+  git_info['USER'] = jss_prefs.user
+  git_info['LOG'] = subprocess.check_output(["git", "log", '--format=%h - %cD %ce: %n %s%n', script_file]).strip()
+  return git_info
 
+def template_script(text, script_info):
+
+  # We need to subclass Template in order to change the delimiter
+  class JSSTemplate(Template):
+    delimiter = '@@'
+    
+  t = JSSTemplate(text)
+  
+  try:
+    out = t.safe_substitute(script_info)
+  except:
+    print "Failed to template %s:" % text
+    raise
+  return out
+
+
+  
 def save_script(jss_script):
   try:
     jss_script.save()
