@@ -7,6 +7,8 @@ import sys
 import time
 import subprocess
 import dircache
+import io
+import re
 from string import Template
 from base64 import b64encode, b64decode
 from optparse import OptionParser
@@ -37,6 +39,7 @@ def _main(options):
   # Create a new JSS object
   jss_prefs = jss.JSSPrefs()
   _jss = jss.JSS(jss_prefs)
+  print "Pushing tag %s to jss: %s" % (options.script_tag, jss_prefs.url) 
   try:
     switch_to_tag(options.script_tag)
     if not options.push_all:
@@ -48,17 +51,20 @@ def _main(options):
       update_script(jss_script, options.script_file, script_info)
       save_script(jss_script)
     else:
+      print "Trying to push all script files"
       # Find out the names of all potential files on the current directory
-      all_files = [ x for x in dircache.listdir(".") if \
-                    not re.match('^\.', x) \
+      all_files = [ x for x in dircache.listdir(".")\
+                    if not re.match('^\.', x)\
                     and re.match('.*\.(sh|py|pl)$', x) ]
       for this_file in all_files:
         try:
+          print "Loading %s" % this_file
           jss_script = load_script(_jss, this_file)
         except:
           print "Skipping %s: couldn't load it from the JSS" % this_file
           continue
-        update_script(jss_script, options.script_file, options.script_tag)
+        script_info = get_git_info(_jss, this_file, options.script_tag)
+        update_script(jss_script, this_file, script_info)
         save_script(jss_script)
   except:
     print "Something went horribly wrong!"
@@ -79,7 +85,8 @@ def load_script(_jss, script_name):
 
 def switch_to_tag(script_tag):
   try:
-    subprocess.check_call([ "git", "checkout", "tags/" + script_tag, "-b", "release-" + script_tag ])
+    subprocess.check_call([ "git", "stash", "-q" ])
+    subprocess.check_call([ "git", "checkout", "tags/" + script_tag, "-b", "release-" + script_tag, "-q" ])
   except:
     print "Couldn't switch to tag %s: are you sure it exists?"
     raise
@@ -89,8 +96,11 @@ def switch_to_tag(script_tag):
 def cleanup(script_tag):
   print "Cleaning up"
   subprocess.check_call([ "git", "checkout", "master" ])
-  subprocess.check_call([ "git", "branch", "-d", "release-"+script_tag ])
+  subprocess.check_call([ "git", "branch", "-d", "release-"+script_tag, "-q"])
+  if subprocess.check_output([ "git", "stash", "list" ]) != "":
+    out = subprocess.check_call([ "git", "stash", "pop", "-q" ])
 
+  
   
 def update_script(jss_script, script_file, script_info, should_template=True):
   # Update the notes field to contain the full GIT log for this
@@ -101,13 +111,13 @@ def update_script(jss_script, script_file, script_info, should_template=True):
   # Update the script - we need to write a base64 encoded version
   # of the contents of script_file into the 'script_contents_encoded'
   # element of the script object
-  f = open(script_file, 'r')
+  f = io.open(script_file, 'r', encoding="utf-8")
   
   if should_template == True:
     print "Templating script..."
-    jss_script.find('script_contents_encoded').text = b64encode(template_script(f.read(), script_info))
+    jss_script.find('script_contents_encoded').text = b64encode(template_script(f.read(), script_info).encode('utf-8'))
   else:
-    jss_script.find('script_contents_encoded').text = b64encode(f.read())
+    jss_script.find('script_contents_encoded').text = b64encode(f.read().encode('utf-8'))
   f.close()
   
   # Only one of script_contents and script_contents_encoded should be sent
@@ -134,7 +144,7 @@ def template_script(text, script_info):
   try:
     out = t.safe_substitute(script_info)
   except:
-    print "Failed to template %s:" % text
+    print "Failed to template this script!" 
     raise
   return out
 
