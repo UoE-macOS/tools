@@ -42,30 +42,25 @@ def _main(options):
   print "Pushing tag %s to jss: %s" % (options.script_tag, jss_prefs.url) 
   try:
     switch_to_tag(options.script_tag)
-    if not options.push_all:
+    if options.push_all:
+      files = [ x for x in dircache.listdir(".")\
+                    if not re.match('^\.', x)\
+                    and re.match('.*\.(sh|py|pl)$', x) ]
+    else:
       if not options.script_name:
         print "No name specified, assuming %s" % options.script_file
 	options.script_name=options.script_file
-      jss_script = load_script(_jss, options.script_name)
-      script_info = get_git_info(_jss, options.script_file, options.script_tag) 
-      update_script(jss_script, options.script_file, script_info)
+        files = [ options.script_file ]
+    for this_file in files:
+      try:
+        print "Loading %s" % this_file
+        jss_script = load_script(_jss, this_file)
+      except:
+        print "Skipping %s: couldn't load it from the JSS" % this_file
+        continue
+      script_info = get_git_info(_jss, this_file, options.script_tag)
+      update_script(jss_script, this_file, script_info)
       save_script(jss_script)
-    else:
-      print "Trying to push all script files"
-      # Find out the names of all potential files on the current directory
-      all_files = [ x for x in dircache.listdir(".")\
-                    if not re.match('^\.', x)\
-                    and re.match('.*\.(sh|py|pl)$', x) ]
-      for this_file in all_files:
-        try:
-          print "Loading %s" % this_file
-          jss_script = load_script(_jss, this_file)
-        except:
-          print "Skipping %s: couldn't load it from the JSS" % this_file
-          continue
-        script_info = get_git_info(_jss, this_file, options.script_tag)
-        update_script(jss_script, this_file, script_info)
-        save_script(jss_script)
   except:
     print "Something went horribly wrong!"
     raise
@@ -77,7 +72,6 @@ def load_script(_jss, script_name):
   try:
     jss_script = _jss.Script(script_name)
   except:
-    print "Failed to load script %s from the JSS" % script_name
     raise
   else:
     print "Loaded %s from the JSS" % script_name
@@ -106,19 +100,16 @@ def update_script(jss_script, script_file, script_info, should_template=True):
   # Update the notes field to contain the full GIT log for this
   # script. I don't know what the size limit on this is...
   jss_script.find('notes').text = script_info['LOG']
-  print jss_script.find('notes')
-  
+
   # Update the script - we need to write a base64 encoded version
   # of the contents of script_file into the 'script_contents_encoded'
   # element of the script object
-  f = io.open(script_file, 'r', encoding="utf-8")
-  
-  if should_template == True:
-    print "Templating script..."
-    jss_script.find('script_contents_encoded').text = b64encode(template_script(f.read(), script_info).encode('utf-8'))
-  else:
-    jss_script.find('script_contents_encoded').text = b64encode(f.read().encode('utf-8'))
-  f.close()
+  with io.open(script_file, 'r', encoding="utf-8") as f:   
+    if should_template == True:
+      print "Templating script..."
+      jss_script.find('script_contents_encoded').text = b64encode(template_script(f.read(), script_info).encode('utf-8'))
+    else:
+      jss_script.find('script_contents_encoded').text = b64encode(f.read().encode('utf-8'))
   
   # Only one of script_contents and script_contents_encoded should be sent
   # so delete the one we are not using.
