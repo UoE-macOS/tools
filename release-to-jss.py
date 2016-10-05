@@ -9,39 +9,36 @@ import subprocess
 import dircache
 import io
 import re
+import argparse
 from string import Template
 from base64 import b64encode, b64decode
 from optparse import OptionParser
-  
-parser = OptionParser()
 
-parser.add_option("-t", "--tag", dest="script_tag",
-                  help="Name of the tag to push", metavar="TAG")
-parser.add_option("-f", "--file", dest="script_file",
-                  help="Name of the local file whose contents we want to push to the JSS", metavar="FILE")
-parser.add_option("-n", "--name", dest="script_name",
-                  help="Name of the script on the JSS, assumed to be the same as FILE if not provided", metavar="NAME")
-parser.add_option("-a", "--all", action="store_true", dest="push_all",  default=False,
-                  help="Push ALL scripts in CWD to the JSS, at version TAG, assuming each local script has a matching name on the JSS")
-parser.add_option("-q", "--quiet", action="store_false", dest="verbose", default=True, help="don't print status messages to stdout")
-parser.description="The script expects that the current working directory is a local git repository in which <file> exists. You need to have the jss-python module installed and configured appropriately to talk to your JSS. MANY thanks to craigsheag for that module:  https://github.com/sheagcraig/python-jss"
+parser = argparse.ArgumentParser(description='The script expects that the current working directory is a local git repository in which <file> exists. You need to have the jss-python module installed and configured appropriately to talk to your JSS. MANY thanks to craigsheag for that module:  https://github.com/sheagcraig/python-jss')
 
-(options, args) = parser.parse_args()
+parser.add_argument('tag', metavar='TAG', type=str, help='Name of the TAG in GIT')
+group = parser.add_mutually_exclusive_group()
+group.add_argument('--file', metavar='FILE', dest='script_file', type=str, nargs=1, help='File to push to the JSS')
+group.add_argument('--all', action='store_true', default=False, dest='push_all',  help='Push entire directory')
+parser.add_argument('--name', metavar='NAME', dest='script_name', type=str, nargs=1, help='Name of the script in JSS (if different from FILE)')
 
+options = parser.parse_args()
+
+print options
 def _main(options):
   if not ( options.script_file or options.push_all ):
     print "You need to specify a script file to push, or --all"
     sys.exit(255)
-  if not options.script_tag:
+  if not options.tag:
     print "Please specify a tag to push to the JSS"
     sys.exit(255)
 
   # Create a new JSS object
   jss_prefs = jss.JSSPrefs()
   _jss = jss.JSS(jss_prefs)
-  print "Pushing tag %s to jss: %s" % (options.script_tag, jss_prefs.url) 
+  print "Pushing tag %s to jss: %s" % (options.tag, jss_prefs.url) 
   try:
-    switch_to_tag(options.script_tag)
+    switch_to_tag(options.tag)
     if options.push_all:
       files = [ x for x in dircache.listdir(".")\
                     if not re.match('^\.', x)\
@@ -58,14 +55,14 @@ def _main(options):
       except:
         print "Skipping %s: couldn't load it from the JSS" % this_file
         continue
-      script_info = get_git_info(_jss, this_file, options.script_tag)
+      script_info = get_git_info(_jss, this_file, options.tag)
       update_script(jss_script, this_file, script_info)
       save_script(jss_script)
   except:
     print "Something went horribly wrong!"
     raise
   finally:
-    cleanup(options.script_tag)
+    cleanup(options.tag)
 
 def load_script(_jss, script_name):
    # look up the script in the jss
@@ -82,7 +79,7 @@ def switch_to_tag(script_tag):
     subprocess.check_call([ "git", "stash", "-q" ])
     subprocess.check_call([ "git", "checkout", "tags/" + script_tag, "-b", "release-" + script_tag, "-q" ])
   except:
-    print "Couldn't switch to tag %s: are you sure it exists?"
+    print "Couldn't switch to tag %s: are you sure it exists?" % script_tag
     raise
   else:
     return True
@@ -115,6 +112,7 @@ def update_script(jss_script, script_file, script_info, should_template=True):
   # so delete the one we are not using.
   jss_script.remove(jss_script.find('script_contents'))
 
+
 def get_git_info(jss_prefs, script_file, script_tag):
   git_info={}
   git_info['VERSION'] = script_tag
@@ -124,8 +122,8 @@ def get_git_info(jss_prefs, script_file, script_tag):
   git_info['LOG'] = subprocess.check_output(["git", "log", '--format=%h - %cD %ce: %n %s%n', script_file]).strip()
   return git_info
 
-def template_script(text, script_info):
 
+def template_script(text, script_info):
   # We need to subclass Template in order to change the delimiter
   class JSSTemplate(Template):
     delimiter = '@@'
@@ -140,7 +138,6 @@ def template_script(text, script_info):
   return out
 
 
-  
 def save_script(jss_script):
   try:
     jss_script.save()
