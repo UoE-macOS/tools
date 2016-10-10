@@ -14,31 +14,32 @@ from string import Template
 from base64 import b64encode, b64decode
 from optparse import OptionParser
 
-parser = argparse.ArgumentParser(description='The script expects that the current working directory is a local git repository in which <file> exists. You need to have the jss-python module installed and configured appropriately to talk to your JSS. MANY thanks to craigsheag for that module:  https://github.com/sheagcraig/python-jss')
+parser = argparse.ArgumentParser(usage='release-to-jss.py [-h] [--all | --file FILE [ --name NAME ] ] TAG', description='The script expects that the current working directory is a local git repository in which <file> exists. You need to have the jss-python module installed and configured appropriately to talk to your JSS. MANY thanks to craigsheag for that module:  https://github.com/sheagcraig/python-jss')
 
 parser.add_argument('tag', metavar='TAG', type=str, help='Name of the TAG in GIT')
-group = parser.add_mutually_exclusive_group()
-group.add_argument('--file', metavar='FILE', dest='script_file', type=str, nargs=1, help='File to push to the JSS')
-group.add_argument('--all', action='store_true', default=False, dest='push_all',  help='Push entire directory')
-parser.add_argument('--name', metavar='NAME', dest='script_name', type=str, nargs=1, help='Name of the script in JSS (if different from FILE)')
+parser.add_argument('--name', metavar='NAME', dest='script_name', type=str, help='Name of the script in JSS (if different from FILE)')
+fileorall = parser.add_mutually_exclusive_group()
+fileorall.add_argument('--file', metavar='FILE', dest='script_file', type=str, help='File to push to the JSS')
+fileorall.add_argument('--all', action='store_true', default=False, dest='push_all',  help='Push entire directory')
 
 options = parser.parse_args()
 
-print options
-def _main(options):
-  if not ( options.script_file or options.push_all ):
-    print "You need to specify a script file to push, or --all"
-    sys.exit(255)
-  if not options.tag:
-    print "Please specify a tag to push to the JSS"
-    sys.exit(255)
+# --name doesn't make any sense with --all, but argparse won't let us express that with groups
+# so add in a hacky check here
 
+
+def _main(options):
+  if options.push_all and options.script_name:
+    print "WARNING: --all was specified so ignoring --name option"
   # Create a new JSS object
   jss_prefs = jss.JSSPrefs()
   _jss = jss.JSS(jss_prefs)
   print "Pushing tag %s to jss: %s" % (options.tag, jss_prefs.url) 
   try:
-    switch_to_tag(options.tag)
+    try:
+      switch_to_tag(options.tag)
+    except:
+      sys.exit(240)
     if options.push_all:
       files = [ x for x in dircache.listdir(".")\
                     if not re.match('^\.', x)\
@@ -59,8 +60,7 @@ def _main(options):
       update_script(jss_script, this_file, script_info)
       save_script(jss_script)
   except:
-    print "Something went horribly wrong!"
-    raise
+    print "Something went wrong."
   finally:
     cleanup(options.tag)
 
@@ -75,10 +75,10 @@ def load_script(_jss, script_name):
     return jss_script
 
 def switch_to_tag(script_tag):
-  try:
+  try:	
     subprocess.check_call([ "git", "stash", "-q" ])
     subprocess.check_call([ "git", "checkout", "tags/" + script_tag, "-b", "release-" + script_tag, "-q" ])
-  except:
+  except Exception:
     print "Couldn't switch to tag %s: are you sure it exists?" % script_tag
     raise
   else:
@@ -87,7 +87,8 @@ def switch_to_tag(script_tag):
 def cleanup(script_tag):
   print "Cleaning up"
   subprocess.check_call([ "git", "checkout", "master" ])
-  subprocess.check_call([ "git", "branch", "-d", "release-"+script_tag, "-q"])
+  if "release-"+script_tag in subprocess.check_output([ "git", "branch" ]): 
+    subprocess.check_call([ "git", "branch", "-d", "release-"+script_tag, "-q"])
   if subprocess.check_output([ "git", "stash", "list" ]) != "":
     out = subprocess.check_call([ "git", "stash", "pop", "-q" ])
 
