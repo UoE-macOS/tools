@@ -8,27 +8,54 @@ import time
 import subprocess
 import dircache
 import io
+import os
 import re
 import argparse
+import tempfile
+import shutil
 from string import Template
 from base64 import b64encode, b64decode
 from optparse import OptionParser
 
-parser = argparse.ArgumentParser(usage='release-to-jss.py [-h] [--all | --file FILE [ --name NAME ] ] TAG', description='The script expects that the current working directory is a local git repository in which <file> exists. You need to have the jss-python module installed and configured appropriately to talk to your JSS. MANY thanks to craigsheag for that module:  https://github.com/sheagcraig/python-jss')
+description = """A tool to update scripts on the JSS to match a tagged release in a Git repository.
 
-parser.add_argument('tag', metavar='TAG', type=str, help='Name of the TAG in GIT')
-parser.add_argument('--name', metavar='NAME', dest='script_name', type=str, help='Name of the script in JSS (if different from FILE)')
+The 'notes' field of the JSS script object will contain the Git log for the corresponding 
+Script file. Some templating is also carried out. 
+
+You need to have the jss-python module installed and configured appropriately to talk to your JSS. 
+MANY thanks to sheagcraig for that module:  https://github.com/sheagcraig/python-jss
+
+TEMPLATING: The following fields, if present in the script file, will be templated with values from Git:
+
+@@DATE Date of last change
+@@VERSION The name of the TAG this file was pushed from 
+@@ORIGIN Origin URL from Git config
+@@USER JSS Username used to push the script (from jss-python configuration)
+
+"""
+
+
+epilog="""
+"""
+
+parser = argparse.ArgumentParser(usage='release-to-jss.py [-h] [--all | --file FILE [ --name NAME ] ] TAG', description=description, epilog=epilog, formatter_class=argparse.RawDescriptionHelpFormatter)
+
+parser.add_argument('tag', metavar='TAG', type=str, help='Name of the TAG in Git. The tag must have been pushed to origin: locally committed tags will not be accepted.')
+parser.add_argument('--name', metavar='NAME', dest='script_name', type=str, help='Name of the script object in the JSS (if omitted, it is assumed that he script object has a name exactly matching FILE)')
 fileorall = parser.add_mutually_exclusive_group()
-fileorall.add_argument('--file', metavar='FILE', dest='script_file', type=str, help='File to push to the JSS')
-fileorall.add_argument('--all', action='store_true', default=False, dest='push_all',  help='Push entire directory')
+fileorall.add_argument('--file', metavar='FILE', dest='script_file', type=str, help='File containing the script to push to the JSS')
+fileorall.add_argument('--all', action='store_true', default=False, dest='push_all',  help='Push every file in the current directory which has a matching script object on the JSS')
 
 options = parser.parse_args()
 
-# --name doesn't make any sense with --all, but argparse won't let us express that with groups
-# so add in a hacky check here
-
-
 def _main(options):
+
+  global tmpdir, owd
+  owd = os.getcwd()
+  tmpdir = make_temp_dir()
+  
+  # --name doesn't make any sense with --all, but argparse won't let us express that with groups
+  # so add in a hacky check here
   if options.push_all and options.script_name:
     print "WARNING: --all was specified so ignoring --name option"
   # Create a new JSS object
@@ -36,10 +63,7 @@ def _main(options):
   _jss = jss.JSS(jss_prefs)
   print "Pushing tag %s to jss: %s" % (options.tag, jss_prefs.url) 
   try:
-    try:
-      switch_to_tag(options.tag)
-    except:
-      sys.exit(240)
+    switch_to_tag(options.tag)
     if options.push_all:
       files = [ x for x in dircache.listdir(".")\
                     if not re.match('^\.', x)\
@@ -61,9 +85,14 @@ def _main(options):
       save_script(jss_script)
   except:
     print "Something went wrong."
+    raise
   finally:
-    cleanup(options.tag)
+    cleanup_tmp()
+    
+def make_temp_dir():
+  return tempfile.mkdtemp()
 
+  
 def load_script(_jss, script_name):
    # look up the script in the jss
   try:
@@ -75,15 +104,18 @@ def load_script(_jss, script_name):
     return jss_script
 
 def switch_to_tag(script_tag):
-  try:	
-    subprocess.check_call([ "git", "stash", "-q" ])
-    subprocess.check_call([ "git", "checkout", "tags/" + script_tag, "-b", "release-" + script_tag, "-q" ])
+  origin = subprocess.check_output(["git", "config", "--get", "remote.origin.url"]).strip()
+  try:
+    print origin
+    # Check out a fresh copy of the tag we are interested in pushing
+    subprocess.check_call([ "git", "clone", "-q", "--branch", script_tag, origin + ".git", tmpdir ])
   except Exception:
-    print "Couldn't switch to tag %s: are you sure it exists?" % script_tag
+    print "Couldn't check out tag %s: are you sure it exists?" % script_tag
     raise
   else:
     return True
 
+  
 def cleanup(script_tag):
   print "Cleaning up"
   subprocess.check_call([ "git", "checkout", "master" ])
@@ -92,7 +124,10 @@ def cleanup(script_tag):
   if subprocess.check_output([ "git", "stash", "list" ]) != "":
     out = subprocess.check_call([ "git", "stash", "pop", "-q" ])
 
-  
+def cleanup_tmp():
+  print "Cleaning up..."
+  shutil.rmtree(tmpdir)
+  print "Done."
   
 def update_script(jss_script, script_file, script_info, should_template=True):
   # Update the notes field to contain the full GIT log for this
@@ -102,7 +137,7 @@ def update_script(jss_script, script_file, script_info, should_template=True):
   # Update the script - we need to write a base64 encoded version
   # of the contents of script_file into the 'script_contents_encoded'
   # element of the script object
-  with io.open(script_file, 'r', encoding="utf-8") as f:   
+  with io.open(tmpdir + "/" + script_file, 'r', encoding="utf-8") as f:   
     if should_template == True:
       print "Templating script..."
       jss_script.find('script_contents_encoded').text = b64encode(template_script(f.read(), script_info).encode('utf-8'))
@@ -117,10 +152,10 @@ def update_script(jss_script, script_file, script_info, should_template=True):
 def get_git_info(jss_prefs, script_file, script_tag):
   git_info={}
   git_info['VERSION'] = script_tag
-  git_info['ORIGIN'] = subprocess.check_output(["git", "config", "--get", "remote.origin.url"]).strip()
-  git_info['DATE'] = time.strftime("%c")
+  git_info['ORIGIN'] = subprocess.check_output(["git", "config", "--get", "remote.origin.url"], cwd=tmpdir).strip()
+  git_info['DATE'] = subprocess.check_output(["git", "log", "-1", '--format="%ad"', script_file], cwd=tmpdir).strip()
   git_info['USER'] = jss_prefs.user
-  git_info['LOG'] = subprocess.check_output(["git", "log", '--format=%h - %cD %ce: %n %s%n', script_file]).strip()
+  git_info['LOG'] = subprocess.check_output(["git", "log", '--format=%h - %cD %ce: %n %s%n', script_file], cwd=tmpdir).strip()
   return git_info
 
 
@@ -134,7 +169,7 @@ def template_script(text, script_info):
   try:
     out = t.safe_substitute(script_info)
   except:
-    print "Failed to template this script!" 
+    print "Failed to template this script." 
     raise
   return out
 
@@ -146,7 +181,7 @@ def save_script(jss_script):
     print "Failed to save the script to the jss"
     raise
   else:
-    print "Saved %s to the JSS!" % jss_script.find('name').text
+    print "Saved %s to the JSS." % jss_script.find('name').text
     return True
   
 
