@@ -117,6 +117,9 @@ def switch_to_tag(script_tag):
 
   
 def cleanup(script_tag):
+  # This function is never called but could be used if we supported
+  # pushing a tag that hasn't been pushed to master yet, perhaps for
+  # development purposes.
   print "Cleaning up"
   subprocess.check_call([ "git", "checkout", "master" ])
   if "release-"+script_tag in subprocess.check_output([ "git", "branch" ]): 
