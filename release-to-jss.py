@@ -30,6 +30,7 @@ TEMPLATING: The following fields, if present in the script file, will be templat
 @@DATE Date of last change
 @@VERSION The name of the TAG this file was pushed from 
 @@ORIGIN Origin URL from Git config
+@@PATH The path to the script file relative to the root of the Git repo
 @@USER JSS Username used to push the script (from jss-python configuration)
 
 """
@@ -69,16 +70,18 @@ def _main(options):
                     if not re.match('^\.', x)\
                     and re.match('.*\.(sh|py|pl)$', x) ]
     else:
+      files = [ options.script_file ]
+    for this_file in files:
       if not options.script_name:
         print "No name specified, assuming %s" % options.script_file
-	options.script_name=options.script_file
-        files = [ options.script_file ]
-    for this_file in files:
+        this_name=options.script_file
+      else:
+        this_name = options.script_name
       try:
-        print "Loading %s" % this_file
-        jss_script = load_script(_jss, this_file)
+        print "Loading %s" % this_name
+        jss_script = load_script(_jss, this_name)
       except:
-        print "Skipping %s: couldn't load it from the JSS" % this_file
+        print "Skipping %s: couldn't load it from the JSS" % this_name
         continue
       script_info = get_git_info(_jss, this_file, options.tag)
       update_script(jss_script, this_file, script_info)
@@ -105,6 +108,8 @@ def load_script(_jss, script_name):
 
 def switch_to_tag(script_tag):
   origin = subprocess.check_output(["git", "config", "--get", "remote.origin.url"]).strip()
+  if re.search('\.git$', origin):
+    origin = origin[:-4]
   try:
     print origin
     # Check out a fresh copy of the tag we are interested in pushing
@@ -156,6 +161,7 @@ def get_git_info(jss_prefs, script_file, script_tag):
   git_info={}
   git_info['VERSION'] = script_tag
   git_info['ORIGIN'] = subprocess.check_output(["git", "config", "--get", "remote.origin.url"], cwd=tmpdir).strip()
+  git_info['PATH'] = script_file 
   git_info['DATE'] = subprocess.check_output(["git", "log", "-1", '--format="%ad"', script_file], cwd=tmpdir).strip()
   git_info['USER'] = jss_prefs.user
   git_info['LOG'] = subprocess.check_output(["git", "log", '--format=%h - %cD %ce: %n %s%n', script_file], cwd=tmpdir).strip()
