@@ -39,7 +39,8 @@ TMPDIR = None
 def _get_args():
     """ Parse arguments from the commandline and return something sensible """
 
-    parser = argparse.ArgumentParser(usage=('release-to-jss.py [-h] [--all | --file FILE '
+    parser = argparse.ArgumentParser(usage=('release-to-jss.py [-h] [--create] '
+                                            '[--all | --file FILE '
                                             '[ --name NAME ] ] TAG'),
                                      description=DESCRIPTION, epilog=EPILOG,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -52,6 +53,9 @@ def _get_args():
                         help=('Name of the script object in the JSS (if omitted, it is assumed '
                               'that the script object has a name exactly matching FILE)'))
 
+    parser.add_argument('--create', action='store_true', default=False, dest='create_tag',
+                        help="If TAG doesn't exist, then create it and push to the server")
+                        
     file_or_all = parser.add_mutually_exclusive_group()
 
     file_or_all.add_argument('--file', metavar='FILE', dest='script_file', type=str,
@@ -63,6 +67,9 @@ def _get_args():
 
     return parser.parse_args()
 
+class Git2JSSError(BaseException):
+    """ Generic error class for this script """
+    pass
 
 def _main(options):
     """ Main function """
@@ -73,12 +80,22 @@ def _main(options):
     # so add in a hacky check here
     if options.push_all and options.script_name:
         print "WARNING: --all was specified so ignoring --name option"
+
+    if not tag_exists(options.tag):
+        if options.create_tag:
+            create_tag(options.tag, "Tagged by Git2JSS")
+        else:
+            raise Git2JSSError("Tag does not exist. If you want to create it you can "
+                               "specify --create on the commandline.")
+            
     # Create a new JSS object
     jss_prefs = jss.JSSPrefs()
     _jss = jss.JSS(jss_prefs)
+    
     print "Pushing tag %s to jss: %s" % (options.tag, jss_prefs.url)
+
     try:
-        switch_to_tag(options.tag)
+        checkout_tag(options.tag)
         if options.push_all:
             files = [x for x in dircache.listdir(".")
                      if not re.match(r'^\.', x)
@@ -123,7 +140,7 @@ def load_script(_jss, script_name):
         print "Loaded %s from the JSS" % script_name
         return jss_script
 
-def switch_to_tag(script_tag):
+def checkout_tag(script_tag):
     """ Check out a fresh copy of the tag we are going to operate on
         script_tag must be present on the git master
     """
@@ -141,6 +158,23 @@ def switch_to_tag(script_tag):
     else:
         return True
 
+def tag_exists(tag):
+    """ Check whether a tag exists. Returns True or false """
+    tags = subprocess.check_output(['git', 'tag']).split('\n')
+    return tag in tags
+
+    
+def create_tag(tag_name, msg):
+    """ Create tag if it doesn't exist """
+    if tag_exists(tag_name):
+        print "Tag %s already exists" % tag_name
+        raise Git2JSSError("Tag %s already exists" % tag_name)
+    
+    subprocess.check_call(['git', 'tag', '-a', tag_name, '-m', msg])
+    subprocess.check_call(['git', 'push', 'origin', tag_name])
+
+    print "Tag %s pushed to master"
+    
 
 #def cleanup(script_tag):
     # This function is never called but could be used if we supported
