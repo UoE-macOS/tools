@@ -70,17 +70,19 @@ def _get_args():
                              help=('Push every file in the current directory which has '
                                    'a matching script object on the JSS'))
 
-    return parser.parse_args()
-
-def _main(options):
-    """ Main function """
-    global TMPDIR
-    TMPDIR = make_temp_dir()
+    options = parser.parse_args()
 
     # --name doesn't make any sense with --all, but argparse won't
     # let us express that with groups, so add in a hacky check here
     if options.push_all and options.script_name:
         print "WARNING: --all was specified so ignoring --name option"
+
+    return options
+
+def _main(options):
+    """ Main function """
+    global TMPDIR
+    TMPDIR = make_temp_dir()
 
     if not tag_exists(options.tag):
         if options.create_tag:
@@ -159,11 +161,11 @@ def checkout_tag(script_tag):
         origin = origin[:-4]
     try:
         print origin
-        FNULL = open(os.devnull, 'w')
+        fnull = open(os.devnull, 'w')
         subprocess.check_call(["git", "clone", "-q", "--branch",
-                                script_tag, origin + ".git", TMPDIR],
-                                stderr=subprocess.STDOUT,
-                                stdout=FNULL)
+                               script_tag, origin + ".git", TMPDIR],
+                              stderr=subprocess.STDOUT,
+                              stdout=fnull)
     except subprocess.CalledProcessError:
         raise Git2JSSError("Couldn't check out tag %s: are you sure it exists?" % script_tag)
     else:
@@ -186,7 +188,7 @@ def create_tag(tag_name, msg):
 
     print "Tag %s pushed to master" % tag_name
 
-    
+
 def cleanup_tmp():
     """ General cleanup tasks. """
     print "Cleaning up..."
