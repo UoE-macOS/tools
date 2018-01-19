@@ -76,6 +76,7 @@ def _get_args():
     # let us express that with groups, so add in a hacky check here
     if options.push_all and options.script_name:
         print "WARNING: --all was specified so ignoring --name option"
+        options.script_name = None
 
     return options
 
@@ -136,15 +137,15 @@ def process_script(script, options, _jss):
     code and log messages, the re-upload to the JSS
     """
     if not options.script_name:
-        print "No name specified, assuming %s" % options.script_file
-        this_name = options.script_file
+        print "No name specified, assuming %s" % script
+        jss_name = script
     else:
-        this_name = options.script_name
+        jss_name = options.script_name
     try:
-        print "Loading %s" % this_name
-        jss_script = load_script(_jss, this_name)
+        print "Loading %s" % jss_name
+        jss_script = load_script(_jss, jss_name)
     except jss.exceptions.JSSGetError:
-        print "Skipping %s: couldn't load it from the JSS" % this_name
+        print "Skipping %s: couldn't load it from the JSS" % jss_name
         return
 
     script_info = get_git_info(_jss, script, options.tag)
