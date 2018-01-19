@@ -3,6 +3,7 @@
 ## release-to-jss.py: push a tagged release from git to the JSS
 import subprocess
 import dircache
+import os
 import io
 import re
 import argparse
@@ -36,6 +37,10 @@ EPILOG = """
 
 TMPDIR = None
 
+class Git2JSSError(BaseException):
+    """ Generic error class for this script """
+    pass
+
 def _get_args():
     """ Parse arguments from the commandline and return something sensible """
 
@@ -55,7 +60,7 @@ def _get_args():
 
     parser.add_argument('--create', action='store_true', default=False, dest='create_tag',
                         help="If TAG doesn't exist, then create it and push to the server")
-                        
+
     file_or_all = parser.add_mutually_exclusive_group()
 
     file_or_all.add_argument('--file', metavar='FILE', dest='script_file', type=str,
@@ -67,17 +72,13 @@ def _get_args():
 
     return parser.parse_args()
 
-class Git2JSSError(BaseException):
-    """ Generic error class for this script """
-    pass
-
 def _main(options):
     """ Main function """
     global TMPDIR
     TMPDIR = make_temp_dir()
 
-    # --name doesn't make any sense with --all, but argparse won't let us express that with groups
-    # so add in a hacky check here
+    # --name doesn't make any sense with --all, but argparse won't
+    # let us express that with groups, so add in a hacky check here
     if options.push_all and options.script_name:
         print "WARNING: --all was specified so ignoring --name option"
 
@@ -87,15 +88,16 @@ def _main(options):
         else:
             raise Git2JSSError("Tag does not exist. If you want to create it you can "
                                "specify --create on the commandline.")
-            
+
     # Create a new JSS object
     jss_prefs = jss.JSSPrefs()
     _jss = jss.JSS(jss_prefs)
-    
+
     print "Pushing tag %s to jss: %s" % (options.tag, jss_prefs.url)
 
     try:
         checkout_tag(options.tag)
+
         if options.push_all:
             files = [x for x in dircache.listdir(".")
                      if not re.match(r'^\.', x)
@@ -103,22 +105,9 @@ def _main(options):
         else:
             files = [options.script_file]
 
-        for this_file in files:
-            if not options.script_name:
-                print "No name specified, assuming %s" % options.script_file
-                this_name = options.script_file
-            else:
-                this_name = options.script_name
-            try:
-                print "Loading %s" % this_name
-                jss_script = load_script(_jss, this_name)
-            except jss.exceptions.JSSGetError:
-                print "Skipping %s: couldn't load it from the JSS" % this_name
-                continue
+        for script in files:
+            process_script(script, options, _jss)
 
-            script_info = get_git_info(_jss, this_file, options.tag)
-            update_script(jss_script, this_file, script_info)
-            save_script(jss_script)
     except:
         print "Something went wrong."
         raise
@@ -140,6 +129,26 @@ def load_script(_jss, script_name):
         print "Loaded %s from the JSS" % script_name
         return jss_script
 
+def process_script(script, options, _jss):
+    """ Load the script from the JSS, insert the new
+    code and log messages, the re-upload to the JSS
+    """
+    if not options.script_name:
+        print "No name specified, assuming %s" % options.script_file
+        this_name = options.script_file
+    else:
+        this_name = options.script_name
+    try:
+        print "Loading %s" % this_name
+        jss_script = load_script(_jss, this_name)
+    except jss.exceptions.JSSGetError:
+        print "Skipping %s: couldn't load it from the JSS" % this_name
+        return
+
+    script_info = get_git_info(_jss, script, options.tag)
+    update_script(jss_script, script, script_info)
+    save_script(jss_script)
+
 def checkout_tag(script_tag):
     """ Check out a fresh copy of the tag we are going to operate on
         script_tag must be present on the git master
@@ -150,11 +159,13 @@ def checkout_tag(script_tag):
         origin = origin[:-4]
     try:
         print origin
+        FNULL = open(os.devnull, 'w')
         subprocess.check_call(["git", "clone", "-q", "--branch",
-                               script_tag, origin + ".git", TMPDIR])
+                                script_tag, origin + ".git", TMPDIR],
+                                stderr=subprocess.STDOUT,
+                                stdout=FNULL)
     except subprocess.CalledProcessError:
-        print "Couldn't check out tag %s: are you sure it exists?" % script_tag
-        raise
+        raise Git2JSSError("Couldn't check out tag %s: are you sure it exists?" % script_tag)
     else:
         return True
 
@@ -163,30 +174,19 @@ def tag_exists(tag):
     tags = subprocess.check_output(['git', 'tag']).split('\n')
     return tag in tags
 
-    
+
 def create_tag(tag_name, msg):
     """ Create tag if it doesn't exist """
     if tag_exists(tag_name):
         print "Tag %s already exists" % tag_name
         raise Git2JSSError("Tag %s already exists" % tag_name)
-    
+
     subprocess.check_call(['git', 'tag', '-a', tag_name, '-m', msg])
     subprocess.check_call(['git', 'push', 'origin', tag_name])
 
-    print "Tag %s pushed to master"
+    print "Tag %s pushed to master" % tag_name
+
     
-
-#def cleanup(script_tag):
-    # This function is never called but could be used if we supported
-    # pushing a tag that hasn't been pushed to master yet, perhaps for
-    # development purposes.
-#    print "Cleaning up"
-#    subprocess.check_call(["git", "checkout", "master"])
-#    if "release-"+script_tag in subprocess.check_output(["git", "branch"]):
-#        subprocess.check_call(["git", "branch", "-d", "release-"+script_tag, "-q"])
-#    if subprocess.check_output(["git", "stash", "list"]) != "":
-#        out = subprocess.check_call(["git", "stash", "pop", "-q"])
-
 def cleanup_tmp():
     """ General cleanup tasks. """
     print "Cleaning up..."
