@@ -1,0 +1,153 @@
+#!/bin/bash
+
+#############
+# Local daemon to fix jam install if required...
+# version: 0.0.1
+#############
+#set -x
+
+main() {
+Network=$(get_network)
+Jamf_Status=$(get_local_jamf_status)
+echo "${Jamf_Status}"
+if [ ${Network} == "pass" ]; then
+    echo "Not a slow network, continuing."
+    # We might have network, but can't reach the cloud so no point continuing.
+    Jamf_Cloud=$(get_jamf_cloud)
+    if [ "${Jamf_Cloud}" == "Fail" ]; then
+    	exit 0; 
+    fi
+    # find out if jamf is borked
+    case ${Jamf_Status} in
+	[2-3])
+	echo "2 or 3 framework"
+	reinstall_quickadd
+	;;
+	1)
+	echo "1 mdm"
+	repair_mdm
+	;;
+	0)
+	echo all good
+	;;
+	*)
+	echo weird
+	;;
+	esac
+else
+   	echo "Network check failed, cannot proceed."
+   	exit 0;
+fi
+}
+
+get_network() {
+Active_Adapter=$( route get ed.ac.uk | grep interface | awk '{print $2}' )
+Adapter_Name=$( networksetup -listallhardwareports | grep -B1 "$Active_Adapter" | awk -F': ' '/Hardware Port/{print $NF}' )
+# Find out out link status if we are on Ethernet or Wireless, then work out if updates should happen.
+if [[ "$Adapter_Name" =~ "Ethernet" ]]; then
+    Link_Speed=$(ifconfig $Active_Adapter | awk -F': ' '/media:/{print $NF}' | awk -F '[()]' '{print $2}' | awk '{print $1}')
+	# Make sure we have a decent connection.
+	if [[ "$Link_Speed" =~ "100baseT" ]] || [[ "$Link_Speed" == "1000baseT" ]]; then
+		Network="pass"
+	else
+		Network="fail"
+	fi
+elif [[ "$Adapter_Name" =~ "Wi-Fi" ]]; then
+    Max_Link_Speed=$(/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I | awk '/maxRate/{print $NF}')
+	Link_Auth=$(/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I | awk '/link auth/{print $NF}')
+	if [ $Max_Link_Speed -le 250 ]; then
+		Network="fail"
+	else
+		Network="pass"
+	fi
+else
+	Network="fail"
+fi
+echo ${Network}
+}
+
+get_local_jamf_status () {
+Jamf_Version=$( /usr/local/bin/jamf version )
+if [ -z ${Jamf_Version} ]; then
+	Jamf_Status="Fail_Jamf"
+else
+	Jamf_Status="Pass"
+fi
+
+MDM_Profile=$( profiles status -type enrollment | grep "MDM enrollment:" | awk '{print $3}' )
+if [ "${MDM_Profile}" == "No" ]; then
+	MDM_Status="Fail_MDM"
+else
+	MDM_Status="Pass"
+fi
+
+if [[ ${Jamf_Status} =~ "Fail_" ]] &&  [[ ${MDM_Status} =~ "Fail_" ]]; then
+	echo 3 #  Worst scenario, booth are borked, return a 3 as it's the sum of the two seperate issues, but it is just a re-install of the quickadd
+fi
+if [[ ${Jamf_Status} =~ "Fail_" ]]; then
+	echo 2 # Jamf is broken, but the mdm seems ok, need to re-install the quickadd
+fi
+if [[ ${MDM_Status} =~ "Fail_" ]]; then
+	echo 1 # MDM is broken, but jamf binary seems ok, need to jamf MDM or manage, not sure...
+fi
+if [[ ${Jamf_Status} == "Pass" ]] &&  [[ ${MDM_Status} == "Pass" ]]; then
+	echo 0 # all is good here
+fi
+}
+
+get_jamf_cloud () {
+# Can we see the JSS?
+if [ -f /Library/Preferences/com.jamfsoftware.jamf.plist ]; then
+	Jamf_URL="$(defaults read /Library/Preferences/com.jamfsoftware.jamf.plist jss_url)"
+else
+	Jamf_URL="https://uoe.jamfcloud.com/"
+fi
+curl -I ${Jamf_URL} &> /dev/null
+jss_status=$?
+if [ ${jss_status} -ne 0 ]; then
+    echo "Can't contact JSS at ${Jamf_URL}"
+    echo "Error status was: ${jss_status}"
+    echo "Please contact support"
+else
+    true
+fi
+}
+
+get_macos () {
+# OS version in form 1012
+macOS_Vers=$( sw_vers -productVersion | awk -F '.' '{print $1$2}' )
+echo ${macOS_Vers}
+}
+
+get_user () {
+User=`python -c 'from SystemConfiguration import SCDynamicStoreCopyConsoleUser; import sys; username = (SCDynamicStoreCopyConsoleUser(None, None, None) or [None])[0]; username = [username,""][username in [u"loginwindow", None, u""]]; sys.stdout.write(username + "\n");'`
+if [ -z ${User} ] || [ ${User} == "" ]; then
+	User="none"
+fi
+echo ${User}
+}
+
+repair_mdm () {
+/usr/local/bin/jamf manage
+sleep 10
+/usr/local/bin/jamf recon
+}
+
+reinstall_quickadd () {
+installer -pkg "/Library/MacSD/QuickAdd.pkg" -target /
+sleep 10
+/usr/local/bin/jamf recon
+}
+
+
+User=$(get_user)
+# 	if [ ${User} == "none" ]; then
+# 		echo "No user present"
+#  else
+#    	echo "User present."
+#	fi
+Caution_Icon="/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/AlertCautionIcon.icns"
+# Call the main function
+main
+
+exit 0;
