@@ -170,7 +170,7 @@ else
 fi
 }
 
-Path_To_QuickAdd="/Library/MacSD/QuickAdd.pkg"
+Path_To_QuickAdd="/Library/MacSD/QuickAddHeal.pkg"
 
 # Call the main function
 main
